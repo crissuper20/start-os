@@ -2,7 +2,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4};
 
 use clap::Parser;
 use imbl_value::InternedString;
-use ipnet::Ipv4Net;
+use ipnet::{Ipv4Net, Ipv6Net};
 use rpc_toolkit::{Context, Empty, HandlerArgs, HandlerExt, ParentHandler, from_fn_async};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -13,7 +13,7 @@ use crate::net::forward::add_iptables_rule;
 use crate::prelude::*;
 use crate::tunnel::context::TunnelContext;
 use crate::tunnel::db::PortForwardEntry;
-use crate::tunnel::wg::{WIREGUARD_INTERFACE_NAME, WgConfig, WgSubnetClients, WgSubnetConfig};
+use crate::tunnel::wg::{WIREGUARD_INTERFACE_NAME, WgConfig, WgSubnetClients, WgSubnetConfig, WgSubnetMap, derive_ipv6};
 use crate::util::serde::{HandlerExtSerde, display_serializable};
 
 pub fn tunnel_api<C: Context>() -> ParentHandler<C> {
@@ -193,11 +193,13 @@ pub fn device_api<C: Context>() -> ParentHandler<C> {
 #[serde(rename_all = "camelCase")]
 pub struct AddSubnetParams {
     name: InternedString,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ipv6_prefix: Option<Ipv6Net>,
 }
 
 pub async fn add_subnet(
     ctx: TunnelContext,
-    AddSubnetParams { name }: AddSubnetParams,
+    AddSubnetParams { name, ipv6_prefix }: AddSubnetParams,
     SubnetParams { mut subnet }: SubnetParams,
 ) -> Result<(), Error> {
     if subnet.prefix_len() > 24 {
@@ -225,11 +227,33 @@ pub async fn add_subnet(
                     ErrorKind::InvalidRequest,
                 ));
             }
+            // Reject duplicate IPv6 prefixes to prevent wg-quick address conflicts
+            if let Some(ref new_prefix) = ipv6_prefix {
+                let current_subnets: WgSubnetMap = map.de()?;
+                for (existing_subnet, existing_config) in &current_subnets.0 {
+                    if *existing_subnet != subnet {
+                        if let Some(ref existing_prefix) = existing_config.ipv6_prefix {
+                            if existing_prefix == new_prefix {
+                                return Err(Error::new(
+                                    eyre!("IPv6 prefix {} is already used by subnet {}", new_prefix, existing_subnet),
+                                    ErrorKind::InvalidRequest,
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
             map.upsert(&subnet, || {
                 Ok(WgSubnetConfig::new(InternedString::default()))
             })?
             .as_name_mut()
             .ser(&name)?;
+            if ipv6_prefix.is_some() {
+                map.as_idx_mut(&subnet)
+                    .or_not_found(&subnet)?
+                    .as_ipv6_prefix_mut()
+                    .ser(&ipv6_prefix)?;
+            }
             db.as_wg().de()
         })
         .await
@@ -262,6 +286,37 @@ pub async fn add_subnet(
             ],
         )
         .await?;
+
+        // IPv6: add MASQUERADE rule for the new subnet's IPv6 prefix
+        if let Some(ref prefix) = ipv6_prefix {
+            use tokio::process::Command;
+            let prefix_str = prefix.trunc().to_string();
+            let check = Command::new("ip6tables")
+                .args([
+                    "-t", "nat", "-C", "POSTROUTING",
+                    "-s", &prefix_str,
+                    "-o", iface.as_str(),
+                    "-j", "MASQUERADE",
+                ])
+                .output()
+                .await;
+            if check.map_or(true, |o| !o.status.success()) {
+                let _ = Command::new("ip6tables")
+                    .args([
+                        "-t", "nat", "-A", "POSTROUTING",
+                        "-s", &prefix_str,
+                        "-o", iface.as_str(),
+                        "-j", "MASQUERADE",
+                    ])
+                    .output()
+                    .await;
+            }
+            // Enable NDP proxying on the upstream interface
+            let _ = Command::new("sysctl")
+                .args(["-w", &format!("net.ipv6.conf.{}.proxy_ndp=1", iface)])
+                .output()
+                .await;
+        }
     }
 
     Ok(())
@@ -272,11 +327,19 @@ pub async fn remove_subnet(
     _: Empty,
     SubnetParams { subnet }: SubnetParams,
 ) -> Result<(), Error> {
-    let (server, keep) = ctx
+    let (server, keep, removed_ipv6_prefix) = ctx
         .db
         .mutate(|db| {
+            // Capture the IPv6 prefix before removing the subnet
+            let ipv6_prefix = db
+                .as_wg()
+                .as_subnets()
+                .as_idx(&subnet)
+                .or_not_found(&subnet)?
+                .as_ipv6_prefix()
+                .de()?;
             db.as_wg_mut().as_subnets_mut().remove(&subnet)?;
-            Ok((db.as_wg().de()?, db.gc_forwards()?))
+            Ok((db.as_wg().de()?, db.gc_forwards()?, ipv6_prefix))
         })
         .await
         .result?;
@@ -309,6 +372,21 @@ pub async fn remove_subnet(
             ],
         )
         .await?;
+
+        // IPv6: remove MASQUERADE rule for the removed subnet's IPv6 prefix
+        if let Some(ref ipv6_prefix) = removed_ipv6_prefix {
+            use tokio::process::Command;
+            let prefix_str = ipv6_prefix.trunc().to_string();
+            let _ = Command::new("ip6tables")
+                .args([
+                    "-t", "nat", "-D", "POSTROUTING",
+                    "-s", &prefix_str,
+                    "-o", iface.as_str(),
+                    "-j", "MASQUERADE",
+                ])
+                .output()
+                .await;
+        }
     }
 
     Ok(())
@@ -332,6 +410,14 @@ pub async fn add_device(
     let server = ctx
         .db
         .mutate(|db| {
+            // Read ipv6_prefix before mutating clients
+            let ipv6_prefix = db
+                .as_wg()
+                .as_subnets()
+                .as_idx(&subnet)
+                .or_not_found(&subnet)?
+                .as_ipv6_prefix()
+                .de()?;
             db.as_wg_mut()
                 .as_subnets_mut()
                 .as_idx_mut(&subnet)
@@ -368,6 +454,10 @@ pub async fn add_device(
                         .entry(ip)
                         .or_insert_with(|| WgConfig::generate(name.clone()));
                     client.name = name;
+                    // Derive IPv6 address from subnet prefix if available
+                    if let Some(ref prefix) = ipv6_prefix {
+                        client.ipv6 = Some(derive_ipv6(prefix, &ip));
+                    }
 
                     Ok(())
                 })?;
@@ -459,14 +549,16 @@ pub async fn show_config(
 ) -> Result<String, Error> {
     let peek = ctx.db.peek().await;
     let wg = peek.as_wg();
-    let client = wg
+    let subnet_config = wg
         .as_subnets()
         .as_idx(&subnet)
-        .or_not_found(&subnet)?
+        .or_not_found(&subnet)?;
+    let client = subnet_config
         .as_clients()
         .as_idx(&ip)
         .or_not_found(&ip)?
         .de()?;
+    let ipv6_prefix = subnet_config.as_ipv6_prefix().de()?;
     let wan_addr = if let Some(wan_addr) = wan_addr.or(local_addr.map(|a| a.ip())).filter(|ip| {
         !ip.is_loopback()
             && !match ip {
@@ -493,6 +585,7 @@ pub async fn show_config(
         .client_config(
             ip,
             subnet,
+            ipv6_prefix,
             wg.as_key().de()?.verifying_key(),
             (wan_addr, wg.as_port().de()?).into(),
         )

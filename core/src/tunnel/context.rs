@@ -142,6 +142,27 @@ impl TunnelContext {
         )
         .await?;
 
+        // IPv6: add FORWARD rule for WireGuard interface (idempotent)
+        {
+            use tokio::process::Command;
+            let check = Command::new("ip6tables")
+                .args([
+                    "-C", "FORWARD", "-i", WIREGUARD_INTERFACE_NAME,
+                    "-m", "state", "--state", "NEW", "-j", "ACCEPT",
+                ])
+                .output()
+                .await;
+            if check.map_or(true, |o| !o.status.success()) {
+                let _ = Command::new("ip6tables")
+                    .args([
+                        "-A", "FORWARD", "-i", WIREGUARD_INTERFACE_NAME,
+                        "-m", "state", "--state", "NEW", "-j", "ACCEPT",
+                    ])
+                    .output()
+                    .await;
+            }
+        }
+
         let peek = db.peek().await;
         peek.as_wg().de()?.sync().await?;
 
@@ -172,6 +193,39 @@ impl TunnelContext {
                     ],
                 )
                 .await?;
+            }
+            // IPv6: add MASQUERADE rules for subnets with IPv6 prefixes
+            for subnet_config in peek.as_wg().as_subnets().de()?.0.values() {
+                if let Some(ref ipv6_prefix) = subnet_config.ipv6_prefix {
+                    use tokio::process::Command;
+                    let prefix_str = ipv6_prefix.trunc().to_string();
+                    // Check if rule already exists, add if not
+                    let check = Command::new("ip6tables")
+                        .args([
+                            "-t", "nat", "-C", "POSTROUTING",
+                            "-s", &prefix_str,
+                            "-o", iface.as_str(),
+                            "-j", "MASQUERADE",
+                        ])
+                        .output()
+                        .await;
+                    if check.map_or(true, |o| !o.status.success()) {
+                        let _ = Command::new("ip6tables")
+                            .args([
+                                "-t", "nat", "-A", "POSTROUTING",
+                                "-s", &prefix_str,
+                                "-o", iface.as_str(),
+                                "-j", "MASQUERADE",
+                            ])
+                            .output()
+                            .await;
+                    }
+                    // Enable NDP proxying on the upstream interface
+                    let _ = Command::new("sysctl")
+                        .args(["-w", &format!("net.ipv6.conf.{}.proxy_ndp=1", iface)])
+                        .output()
+                        .await;
+                }
             }
         }
 

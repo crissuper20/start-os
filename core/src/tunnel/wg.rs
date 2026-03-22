@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::net::{Ipv4Addr, SocketAddr};
 
 use imbl_value::InternedString;
-use ipnet::Ipv4Net;
+use ipnet::{Ipv4Net, Ipv6Net};
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use tokio::process::Command;
@@ -86,12 +86,23 @@ impl Map for WgSubnetMap {
 #[model = "Model<Self>"]
 pub struct WgSubnetConfig {
     pub name: InternedString,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ipv6_prefix: Option<Ipv6Net>,
     pub clients: WgSubnetClients,
 }
 impl WgSubnetConfig {
     pub fn new(name: InternedString) -> Self {
         Self {
             name,
+            ipv6_prefix: None,
+            ..Self::default()
+        }
+    }
+
+    pub fn new_with_ipv6(name: InternedString, ipv6_prefix: Option<Ipv6Net>) -> Self {
+        Self {
+            name,
+            ipv6_prefix,
             ..Self::default()
         }
     }
@@ -153,6 +164,8 @@ pub struct WgConfig {
     pub name: InternedString,
     pub key: Base64<WgKey>,
     pub psk: Base64<[u8; 32]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ipv6: Option<String>,
 }
 impl WgConfig {
     pub fn generate(name: InternedString) -> Self {
@@ -172,6 +185,7 @@ impl WgConfig {
         self,
         addr: Ipv4Addr,
         subnet: Ipv4Net,
+        ipv6_prefix: Option<Ipv6Net>,
         server_pubkey: Base64<PublicKey>,
         server_addr: SocketAddr,
     ) -> ClientConfig {
@@ -179,6 +193,7 @@ impl WgConfig {
             client_config: self,
             client_addr: addr,
             subnet,
+            ipv6_prefix,
             server_pubkey,
             server_addr,
         }
@@ -217,6 +232,7 @@ pub struct ClientConfig {
     client_config: WgConfig,
     client_addr: Ipv4Addr,
     subnet: Ipv4Net,
+    ipv6_prefix: Option<Ipv6Net>,
     #[serde(deserialize_with = "deserialize_verifying_key")]
     server_pubkey: Base64<PublicKey>,
     server_addr: SocketAddr,
@@ -231,6 +247,7 @@ impl std::fmt::Display for ClientConfig {
             psk = self.client_config.psk.to_padded_string(),
             addr = Ipv4Net::new_assert(self.client_addr, self.subnet.prefix_len()),
             subnet = self.subnet.trunc(),
+            ipv6_addr = self.ipv6_prefix.as_ref().and_then(|p| self.client_config.ipv6.as_ref()).map(|a| a.as_str()).unwrap_or(""),
             server_pubkey = self.server_pubkey.to_padded_string(),
             server_addr = self.server_addr,
         )
@@ -253,4 +270,32 @@ impl<'a> std::fmt::Display for ServerConfig<'a> {
         }
         Ok(())
     }
+}
+
+/// Derives an IPv6 address from an IPv6 prefix and an IPv4 address
+/// For example: prefix 2606:cc0:11:2009::/64 and IPv4 10.59.0.2 -> 2606:cc0:11:2009::2
+pub fn derive_ipv6(prefix: &Ipv6Net, ipv4_addr: &Ipv4Addr) -> String {
+    let octets = ipv4_addr.octets();
+    let last_octet = u32::from(*ipv4_addr);
+    // Use the IPv4 address number as the suffix in the IPv6 address
+    let host_id = u128::from_be_bytes([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, octets[0], octets[1], octets[2], octets[3]]);
+    let prefix_addr = prefix.addr();
+    let prefix_addr_u128 = u128::from_be_bytes(prefix_addr.octets());
+    let prefix_len = prefix.prefix_len();
+    
+    // Mask the prefix address to its actual prefix length
+    let prefix_mask = if prefix_len == 0 {
+        0
+    } else {
+        !((1u128 << (128 - prefix_len)) - 1)
+    };
+    
+    let ipv6_int = (prefix_addr_u128 & prefix_mask) | host_id;
+    let ipv6_bytes = ipv6_int.to_be_bytes();
+    format!("{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+        ipv6_bytes[0], ipv6_bytes[1], ipv6_bytes[2], ipv6_bytes[3],
+        ipv6_bytes[4], ipv6_bytes[5], ipv6_bytes[6], ipv6_bytes[7],
+        ipv6_bytes[8], ipv6_bytes[9], ipv6_bytes[10], ipv6_bytes[11],
+        ipv6_bytes[12], ipv6_bytes[13], ipv6_bytes[14], ipv6_bytes[15]
+    )
 }
