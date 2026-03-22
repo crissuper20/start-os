@@ -12,10 +12,11 @@ export const mockTunnelData: TunnelData = {
     subnets: {
       '10.59.0.0/24': {
         name: 'Family',
+        ipv6Prefix: '2606:cc0:11:2009::/64',
         clients: {
-          '10.59.0.2': { name: 'Start9 Server', key: '', psk: '' },
-          '10.59.0.3': { name: 'Phone', key: '', psk: '' },
-          '10.59.0.4': { name: 'Laptop', key: '', psk: '' },
+          '10.59.0.2': { name: 'Start9 Server', key: '', psk: '', ipv6: '2606:cc0:11:2009::2' },
+          '10.59.0.3': { name: 'Phone', key: '', psk: '', ipv6: '2606:cc0:11:2009::3' },
+          '10.59.0.4': { name: 'Laptop', key: '', psk: '', ipv6: '2606:cc0:11:2009::4' },
         },
       },
     },

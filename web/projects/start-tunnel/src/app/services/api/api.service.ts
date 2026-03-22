@@ -16,10 +16,10 @@ export abstract class ApiService {
   abstract setPassword(params: T.Tunnel.SetPasswordParams): Promise<null> // auth.set-password
   // subnets
   abstract addSubnet(
-    params: T.Tunnel.SubnetParams & T.Tunnel.AddSubnetParams,
+    params: T.Tunnel.SubnetParams & T.Tunnel.AddSubnetParams & { ipv6Prefix?: string },
   ): Promise<null> // subnet.add
   abstract editSubnet(
-    params: T.Tunnel.SubnetParams & T.Tunnel.AddSubnetParams,
+    params: T.Tunnel.SubnetParams & T.Tunnel.AddSubnetParams & { ipv6Prefix?: string },
   ): Promise<null> // subnet.edit
   abstract deleteSubnet(params: T.Tunnel.SubnetParams): Promise<null> // subnet.remove
   // devices

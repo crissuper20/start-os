@@ -23,6 +23,7 @@ import { SUBNETS_ADD } from './add'
         <tr>
           <th>Name</th>
           <th>IP Range</th>
+          <th>IPv6 Prefix</th>
           <th [style.padding-inline-end.rem]="0.625">
             <button tuiButton size="xs" iconStart="@tui.plus" (click)="onAdd()">
               Add
@@ -35,6 +36,7 @@ import { SUBNETS_ADD } from './add'
           <tr>
             <td>{{ subnet.name }}</td>
             <td>{{ subnet.range }}</td>
+            <td>{{ subnet.ipv6Prefix || '—' }}</td>
             <td>
               <button
                 tuiIconButton
@@ -100,6 +102,7 @@ export default class Subnets {
           Object.entries(s).map(([range, info]) => ({
             range,
             name: info.name,
+            ipv6Prefix: info.ipv6Prefix,
             hasClients: !!Object.keys(info.clients).length,
           })),
         ),
@@ -116,11 +119,11 @@ export default class Subnets {
       .subscribe()
   }
 
-  protected onEdit({ range, name }: MappedSubnet): void {
+  protected onEdit({ range, name, ipv6Prefix }: MappedSubnet): void {
     this.dialogs
       .open(SUBNETS_ADD, {
         label: 'Rename Subnet',
-        data: { subnet: range, name },
+        data: { subnet: range, name, ipv6Prefix },
       })
       .subscribe()
   }
@@ -166,5 +169,6 @@ export default class Subnets {
 type MappedSubnet = {
   range: string
   name: string
+  ipv6Prefix?: string
   hasClients: boolean
 }

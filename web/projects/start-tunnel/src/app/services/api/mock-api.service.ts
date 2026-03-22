@@ -64,16 +64,14 @@ export class MockApiService extends ApiService {
     return null
   }
 
-  async addSubnet(
-    params: T.Tunnel.SubnetParams & T.Tunnel.AddSubnetParams,
-  ): Promise<null> {
+  async addSubnet(params: T.Tunnel.SubnetParams & T.Tunnel.AddSubnetParams & { ipv6Prefix?: string }): Promise<null> {
     await pauseFor(1000)
 
-    const patch: AddOperation<T.Tunnel.WgSubnetConfig>[] = [
+    const patch: (AddOperation<T.Tunnel.WgSubnetConfig> | ReplaceOperation<string>)[] = [
       {
         op: PatchOp.ADD,
         path: `/wg/subnets/${replaceSlashes(params.subnet)}`,
-        value: { name: params.name, clients: {} },
+        value: { name: params.name, clients: {}, ...(params.ipv6Prefix ? { ipv6Prefix: params.ipv6Prefix } : {}) },
       },
     ]
     this.mockRevision(patch)
@@ -81,18 +79,23 @@ export class MockApiService extends ApiService {
     return null
   }
 
-  async editSubnet(
-    params: T.Tunnel.SubnetParams & T.Tunnel.AddSubnetParams,
-  ): Promise<null> {
+  async editSubnet(params: T.Tunnel.SubnetParams & T.Tunnel.AddSubnetParams & { ipv6Prefix?: string }): Promise<null> {
     await pauseFor(1000)
 
-    const patch: ReplaceOperation<string>[] = [
+    const patch: (ReplaceOperation<string>)[] = [
       {
         op: PatchOp.REPLACE,
         path: `/wg/subnets/${replaceSlashes(params.subnet)}/name`,
         value: params.name,
       },
     ]
+    if (params.ipv6Prefix !== undefined) {
+      patch.push({
+        op: PatchOp.REPLACE,
+        path: `/wg/subnets/${replaceSlashes(params.subnet)}/ipv6Prefix`,
+        value: params.ipv6Prefix,
+      })
+    }
     this.mockRevision(patch)
 
     return null
@@ -181,9 +184,7 @@ export class MockApiService extends ApiService {
     return null
   }
 
-  async updateForwardLabel(
-    params: T.Tunnel.UpdatePortForwardLabelParams,
-  ): Promise<null> {
+  async updateForwardLabel(params: T.Tunnel.UpdatePortForwardLabelParams): Promise<null> {
     await pauseFor(1000)
 
     const patch: ReplaceOperation<string | null>[] = [
@@ -198,9 +199,7 @@ export class MockApiService extends ApiService {
     return null
   }
 
-  async setForwardEnabled(
-    params: T.Tunnel.SetPortForwardEnabledParams,
-  ): Promise<null> {
+  async setForwardEnabled(params: T.Tunnel.SetPortForwardEnabledParams): Promise<null> {
     await pauseFor(1000)
 
     const patch: ReplaceOperation<boolean>[] = [
@@ -226,11 +225,6 @@ export class MockApiService extends ApiService {
     ]
     this.mockRevision(patch)
 
-    return null
-  }
-
-  async restart(): Promise<null> {
-    await pauseFor(1000)
     return null
   }
 

@@ -9,12 +9,14 @@ export interface MappedDevice {
     readonly range: string
   }
   readonly ip: string
+  readonly ipv6?: string
   readonly name: string
 }
 
 export interface MappedSubnet {
   readonly range: string
   readonly name: string
+  readonly ipv6Prefix?: string
   readonly clients: T.Tunnel.WgSubnetClients
 }
 

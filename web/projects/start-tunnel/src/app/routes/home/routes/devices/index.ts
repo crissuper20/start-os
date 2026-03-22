@@ -30,6 +30,7 @@ import { MappedDevice } from './utils'
           <th>Name</th>
           <th>Subnet</th>
           <th>LAN IP</th>
+          <th>IPv6</th>
           <th [style.padding-inline-end.rem]="0.625">
             <button tuiButton size="xs" iconStart="@tui.plus" (click)="onAdd()">
               Add
@@ -43,6 +44,7 @@ import { MappedDevice } from './utils'
             <td>{{ device.name }}</td>
             <td>{{ device.subnet.name }}</td>
             <td>{{ device.ip }}</td>
+            <td>{{ device.ipv6 || '—' }}</td>
             <td>
               <button
                 tuiIconButton
@@ -85,7 +87,7 @@ import { MappedDevice } from './utils'
           </tr>
         } @empty {
           <tr>
-            <td colspan="4">
+            <td colspan="5">
               <app-placeholder icon="@tui.laptop">No devices</app-placeholder>
             </td>
           </tr>
@@ -113,9 +115,10 @@ export default class Devices {
       .watch$('wg', 'subnets')
       .pipe(
         map(subnets =>
-          Object.entries(subnets).map(([range, { name, clients }]) => ({
+          Object.entries(subnets).map(([range, { name, ipv6Prefix, clients }]) => ({
             range,
             name,
+            ipv6Prefix,
             clients,
           })),
         ),
@@ -125,12 +128,13 @@ export default class Devices {
 
   protected readonly devices = computed(() =>
     this.subnets()?.flatMap(subnet =>
-      Object.entries(subnet.clients).map(([ip, { name }]) => ({
+      Object.entries(subnet.clients).map(([ip, { name, ipv6 }]) => ({
         subnet: {
           name: subnet.name,
           range: subnet.range,
         },
         ip,
+        ipv6,
         name,
       })),
     ),

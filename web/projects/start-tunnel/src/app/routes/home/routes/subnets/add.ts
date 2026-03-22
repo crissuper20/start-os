@@ -26,6 +26,14 @@ import { ApiService } from 'src/app/services/api/api.service'
         </tui-textfield>
         <tui-error formControlName="subnet" />
       }
+      <tui-textfield>
+        <label tuiLabel>IPv6 Prefix (optional)</label>
+        <input
+          tuiInput
+          formControlName="ipv6Prefix"
+          placeholder="e.g., 2606:cc0:11:2009::/64"
+        />
+      </tui-textfield>
       <footer>
         <button tuiButton (click)="onSave()">Save</button>
       </footer>
@@ -57,6 +65,7 @@ export class SubnetsAdd {
         ),
       ],
     ],
+    ipv6Prefix: [this.context.data.ipv6Prefix || ''],
   })
 
   protected async onSave() {
@@ -87,4 +96,5 @@ export const SUBNETS_ADD = new PolymorpheusComponent(SubnetsAdd)
 interface Data {
   name: string
   subnet: string
+  ipv6Prefix?: string
 }
